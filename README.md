@@ -1,36 +1,94 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# 🌲 PhotoTree — 3D Voxel Photo & Tree Visualizer
 
-## Getting Started
+> **Top View = Your Photo • Side View = A 3D Voxel Tree**
 
-First, run the development server:
+**PhotoTree** is a web application built with **Next.js**, **Three.js**, and **Tailwind CSS**. It allows users to upload any photo, crop a region, and transform it into a 3D procedural voxel tree.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+---
+
+## ✨ Features
+
+- 📸 **Photo to 3D Voxel Generation**: Upload any image and crop your target area. The app extracts a high-resolution pixel matrix and projects it onto a 3D voxel tree structure.
+- 👁️ **Top-Down Illusion**: When viewed straight from above (`Snap Top View`), the topmost voxels align perfectly to reproduce your uploaded photo.
+- 🌳 **6 Distinct 3D Tree Architectures**:
+  - 🌸 **Sakura Blossom**: Multi-tiered cloud canopy.
+  - 🌳 **Grand Oak**: Classic tall trunk with a wide dome canopy.
+  - 🌲 **Pine**: Conical Christmas tree silhouette with stepped branch tiers.
+  - 🍁 **Maple**: Layered horizontal disc tiers with a visible trunk.
+  - 🌴 **Cedar**: Tabletop umbrella platform silhouette.
+  - 🌺 **Lotus Flower**: 6-petal open bloom.
+- 🌸☀️🍂❄️ **Dynamic Seasons & Procedural PBR Ground**:
+  - **Spring**: Floating cherry blossom petals with procedural meadow grass & flower textures.
+  - **Summer**: Gentle golden pollen sparkles with dense dark forest grass.
+  - **Autumn**: Fast-falling rain streaks with fallen leaf earth textures.
+  - **Winter**: Snowfall animation with snow mounds and ice crystal displacement maps.
+- 📱 **Mobile-First & Distraction-Free UI**:
+  - **Hide UI Toggle**: Easily collapse all overlays to view the 3D tree full-screen.
+  - **Responsive Dock**: View navigation widget automatically adapts to desktop & mobile devices.
+- ⚡ **Optimized WebGL Engine**: Built with Three.js `InstancedMesh`, canvas PBR textures, and zero-deadlock camera controls.
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Node.js**: v18.0.0 or higher
+- **npm** or **yarn** or **pnpm**
+
+### Installation
+
+1. **Clone the repository**:
+   ```bash
+   cd for-her
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+3. **Run the development server**:
+   ```bash
+   npm run dev
+   ```
+
+4. Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+---
+
+## 📁 Project Structure
+
+```text
+for-her/
+├── src/
+│   ├── app/
+│   │   ├── layout.js          # Root layout with Geist font & hydration guards
+│   │   ├── page.js            # Main application UI, state & controls
+│   │   └── globals.css        # Global CSS styles & Tailwind directives
+│   ├── components/
+│   │   ├── VoxelCanvas.jsx    # Three.js WebGL canvas, controls & weather systems
+│   │   └── PhotoCropModal.jsx # Image upload cropper with rotation & zoom
+│   └── utils/
+│       ├── imageProcessor.js  # Pixel matrix color sampling & HTML5 canvas crop
+│       └── treeGenerator.js   # Procedural 3D voxel tree algorithm & height maps
+├── public/                    # Static assets
+└── package.json               # Dependencies & build scripts
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+## 🛠️ Built With
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- [Next.js 15](https://nextjs.org/) — React Framework
+- [Three.js](https://threejs.org/) — 3D WebGL Graphics Engine
+- [GSAP](https://greensock.com/gsap/) — Smooth Camera Animations
+- [Lucide React](https://lucide.dev/) — Modern UI Icons
+- [react-easy-crop](https://github.com/ValentinH/react-easy-crop) — Interactive Canvas Image Cropping
+- [Tailwind CSS](https://tailwindcss.com/) — Utility-first Styling
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## 📜 License
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Created with ❤️ for Her.
