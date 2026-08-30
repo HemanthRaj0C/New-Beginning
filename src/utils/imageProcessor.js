@@ -1,47 +1,71 @@
 /**
  * Extracts pixel color matrix from a canvas, image element, or data URL.
  * Returns a 2D array grid[x][z] containing { r, g, b } normalized 0-1 values.
+ *
+ * Uses 4× supersampling with bilinear filtering to produce much smoother voxel colors:
+ * each voxel color is the average of a 4×4 region in the oversampled canvas,
+ * so neighboring voxels blend naturally rather than producing harsh pixel blocks.
  */
 
 export function extractPixelGrid(imageSource, resolution = 36) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    
+
     // Only set crossOrigin for http/https URLs, NOT for data: URLs
     if (typeof imageSource === "string" && !imageSource.startsWith("data:")) {
       img.crossOrigin = "anonymous";
     }
 
     img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = resolution;
-      canvas.height = resolution;
-      const ctx = canvas.getContext("2d");
+      // ── Supersampling: render at 4× resolution then box-filter down ──
+      // The browser applies bilinear filtering when downscaling drawImage,
+      // so the 4× canvas already contains sub-pixel blended colors.
+      const SCALE = 4;
+      const hi = resolution * SCALE; // e.g. 56 → 224
 
-      if (!ctx) {
-        reject(new Error("Failed to get 2D context"));
-        return;
-      }
+      const hiCanvas = document.createElement("canvas");
+      hiCanvas.width  = hi;
+      hiCanvas.height = hi;
+      const hiCtx = hiCanvas.getContext("2d");
 
-      // Draw image scaled to resolution x resolution
-      ctx.drawImage(img, 0, 0, resolution, resolution);
-      const imgData = ctx.getImageData(0, 0, resolution, resolution);
-      const data = imgData.data;
+      if (!hiCtx) { reject(new Error("Failed to get 2D context")); return; }
 
+      // imageSmoothingQuality = 'high' tells the browser to use a better filter
+      hiCtx.imageSmoothingEnabled  = true;
+      hiCtx.imageSmoothingQuality  = "high";
+      hiCtx.drawImage(img, 0, 0, hi, hi);
+
+      const hiData = hiCtx.getImageData(0, 0, hi, hi).data;
+
+      // Box-filter: average the SCALE×SCALE block for each voxel position
       const grid = [];
       for (let x = 0; x < resolution; x++) {
         grid[x] = [];
         for (let z = 0; z < resolution; z++) {
-          // Canvas pixel index (row-major: z is row y in canvas, x is col x)
-          const idx = (z * resolution + x) * 4;
+          let r = 0, g = 0, b = 0, a = 0;
+          const ox = x * SCALE;
+          const oz = z * SCALE;
+
+          for (let dx = 0; dx < SCALE; dx++) {
+            for (let dz = 0; dz < SCALE; dz++) {
+              const idx = ((oz + dz) * hi + (ox + dx)) * 4;
+              r += hiData[idx];
+              g += hiData[idx + 1];
+              b += hiData[idx + 2];
+              a += hiData[idx + 3];
+            }
+          }
+
+          const inv = 1 / (SCALE * SCALE * 255);
           grid[x][z] = {
-            r: data[idx] / 255,
-            g: data[idx + 1] / 255,
-            b: data[idx + 2] / 255,
-            a: data[idx + 3] / 255,
+            r: r * inv,
+            g: g * inv,
+            b: b * inv,
+            a: a * inv,
           };
         }
       }
+
       resolve(grid);
     };
 
@@ -76,23 +100,17 @@ export function generateSamplePixelGrid(resolution = 36) {
       const dist = Math.sqrt(dx * dx + dz * dz);
       const angle = Math.atan2(dz, dx);
 
-      // Create a flower-like pattern for demonstration
       const petal = Math.sin(angle * 6) * 0.3 + 0.7;
 
       let r, g, b;
       if (dist < resolution * 0.15) {
-        // Yellow flower center
-        r = 0.98;
-        g = 0.85;
-        b = 0.25;
+        r = 0.98; g = 0.85; b = 0.25;
       } else if (dist < resolution * 0.42 * petal) {
-        // Soft pink/rose petals
         const t = (dist - resolution * 0.15) / (resolution * 0.3);
         r = 0.95 - t * 0.2;
         g = 0.45 + t * 0.3;
         b = 0.65 + t * 0.2;
       } else {
-        // Meadow green background
         const noise = (Math.sin(x * 0.5) + Math.cos(z * 0.5)) * 0.1;
         r = 0.2 + noise;
         g = 0.65 + noise;

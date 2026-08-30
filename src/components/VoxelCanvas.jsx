@@ -9,40 +9,34 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
   { voxels, season = "spring", isFlat = false },
   ref
 ) {
-  const containerRef = useRef(null);
-  const sceneRef = useRef(null);
-  const cameraRef = useRef(null);
-  const rendererRef = useRef(null);
-  const controlsRef = useRef(null);
-  const instancedMeshRef = useRef(null);
-  const groundMeshRef = useRef(null);
-  const groundPropsRef = useRef(null);
-  const particlesRef = useRef(null);
+  const containerRef  = useRef(null);
+  const sceneRef      = useRef(null);
+  const cameraRef     = useRef(null);
+  const rendererRef   = useRef(null);
+  const controlsRef   = useRef(null);
+  const instancedMeshRef  = useRef(null);
+  const groundMeshRef     = useRef(null);
+  const groundPropsRef    = useRef(null);
+  const particlesRef      = useRef(null);
   const groundTexCacheRef = useRef({});
 
-  // Camera snap methods
+
+  // ── Camera snap methods ──
   useImperativeHandle(ref, () => ({
     snapToTop: () => {
       const cam = cameraRef.current;
       const ctrl = controlsRef.current;
       if (!cam || !ctrl) return;
 
-      // Keep camera.up = (0,1,0) stable. Use tiny Z epsilon 0.0001 to prevent gimbal lock.
       cam.up.set(0, 1, 0);
       gsap.to(cam.position, {
-        x: 0,
-        y: 45,
-        z: 0.0001,
-        duration: 1.2,
-        ease: "power2.inOut",
+        x: 0, y: 45, z: 0.0001,
+        duration: 1.2, ease: "power2.inOut",
         onUpdate: () => ctrl.update(),
       });
       gsap.to(ctrl.target, {
-        x: 0,
-        y: 0,
-        z: 0,
-        duration: 1.2,
-        ease: "power2.inOut",
+        x: 0, y: 0, z: 0,
+        duration: 1.2, ease: "power2.inOut",
         onUpdate: () => ctrl.update(),
       });
     },
@@ -54,19 +48,13 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
 
       cam.up.set(0, 1, 0);
       gsap.to(cam.position, {
-        x: 0,
-        y: 8,
-        z: 32,
-        duration: 1.2,
-        ease: "power2.inOut",
+        x: 0, y: 8, z: 32,
+        duration: 1.2, ease: "power2.inOut",
         onUpdate: () => ctrl.update(),
       });
       gsap.to(ctrl.target, {
-        x: 0,
-        y: 6,
-        z: 0,
-        duration: 1.2,
-        ease: "power2.inOut",
+        x: 0, y: 6, z: 0,
+        duration: 1.2, ease: "power2.inOut",
         onUpdate: () => ctrl.update(),
       });
     },
@@ -78,19 +66,13 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
 
       cam.up.set(0, 1, 0);
       gsap.to(cam.position, {
-        x: 22,
-        y: 22,
-        z: 22,
-        duration: 1.2,
-        ease: "power2.inOut",
+        x: 22, y: 22, z: 22,
+        duration: 1.2, ease: "power2.inOut",
         onUpdate: () => ctrl.update(),
       });
       gsap.to(ctrl.target, {
-        x: 0,
-        y: 5,
-        z: 0,
-        duration: 1.2,
-        ease: "power2.inOut",
+        x: 0, y: 5, z: 0,
+        duration: 1.2, ease: "power2.inOut",
         onUpdate: () => ctrl.update(),
       });
     },
@@ -101,7 +83,8 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
     const container = containerRef.current;
     if (!container) return;
 
-    const width = container.clientWidth || window.innerWidth;
+    const isMobile = window.innerWidth < 640;
+    const width  = container.clientWidth  || window.innerWidth;
     const height = container.clientHeight || window.innerHeight;
 
     const scene = new THREE.Scene();
@@ -113,7 +96,10 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
     camera.lookAt(0, 5, 0);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: "high-performance",
+    });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = false;
@@ -121,17 +107,20 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
     container.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.05;
+    controls.enableDamping  = true;
+    controls.dampingFactor  = 0.06;
     controls.target.set(0, 5, 0);
     controls.minDistance = 3;
     controls.maxDistance = 120;
-    
-    // Ensure camera.up is always reset on user interaction
+
+    // ── Adaptive Pixel Ratio: drop to 1x DPR during drag → restore after ──
+    // This is the same trick used in Mapbox, Three.js editor, etc. for silky rotation
     controls.addEventListener("start", () => {
-      if (camera.up.y !== 1) {
-        camera.up.set(0, 1, 0);
-      }
+      if (camera.up.y !== 1) camera.up.set(0, 1, 0);
+      renderer.setPixelRatio(1);   // fast during drag
+    });
+    controls.addEventListener("end", () => {
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // full quality at rest
     });
 
     controls.update();
@@ -146,7 +135,7 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
     fill.position.set(-15, 15, -15);
     scene.add(fill);
 
-    // Subdivided ground disc (segments=64 needed for displacementMap)
+    // Subdivided ground disc
     const groundGeo = new THREE.CylinderGeometry(15, 16, 0.6, 64, 12);
     const groundMat = new THREE.MeshStandardMaterial({
       color: 0x2d6a4f,
@@ -160,7 +149,7 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
     groundMeshRef.current = ground;
 
     const onResize = () => {
-      const w = container.clientWidth || window.innerWidth;
+      const w = container.clientWidth  || window.innerWidth;
       const h = container.clientHeight || window.innerHeight;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
@@ -173,17 +162,14 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
       rafId = requestAnimationFrame(animate);
       controls.update();
 
-      // Particle Animation
+      // Particle animation
       if (particlesRef.current) {
-        const pos = particlesRef.current.geometry.attributes.position.array;
+        const pos   = particlesRef.current.geometry.attributes.position.array;
         const speed = particlesRef.current.userData.speed ?? 0.08;
         const isRain = particlesRef.current.userData.isRain;
-
         for (let i = 1; i < pos.length; i += 3) {
           pos[i] -= speed;
-          if (isRain) {
-            pos[i - 1] += 0.01;
-          }
+          if (isRain) pos[i - 1] += 0.01;
           if (pos[i] < -1) {
             pos[i] = 28;
             if (isRain) pos[i - 1] = (Math.random() - 0.5) * 32;
@@ -200,20 +186,19 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
       cancelAnimationFrame(rafId);
       window.removeEventListener("resize", onResize);
       controls.dispose();
-      if (container.contains(renderer.domElement)) {
-        container.removeChild(renderer.domElement);
-      }
+      if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
       renderer.dispose();
       sceneRef.current = null;
     };
   }, []);
 
-  // ── Season Ground Surface, 3D Elements, & Weather Particles ──
+  // ── Season Ground Surface & Weather Particles ──
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    // ── 1. Procedural PBR Ground Textures (color map + bump map + displacement map) ──
+    const isMobile = window.innerWidth < 640;
+
     const cache = groundTexCacheRef.current;
     if (!cache[season]) {
       const S = 512;
@@ -226,30 +211,26 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
       const bc = bumpCanvas.getContext('2d');
 
       if (season === 'spring') {
-        // Base: rich green
         cc.fillStyle = '#2a5c38'; cc.fillRect(0, 0, S, S);
         bc.fillStyle = '#505050'; bc.fillRect(0, 0, S, S);
-        // Dense grass blades
         for (let i = 0; i < 8000; i++) {
           const gx = Math.random() * S, gy = Math.random() * S;
-          const h  = 6 + Math.random() * 18;
+          const h = 6 + Math.random() * 18;
           const hue = 100 + Math.random() * 40;
           const lit = 22 + Math.random() * 18;
           cc.strokeStyle = `hsl(${hue},62%,${lit}%)`;
-          cc.lineWidth   = 0.8 + Math.random();
+          cc.lineWidth = 0.8 + Math.random();
           cc.beginPath();
           cc.moveTo(gx, gy + h);
           cc.quadraticCurveTo(gx + (Math.random()-0.5)*7, gy+h*0.5, gx+(Math.random()-0.5)*4, gy);
           cc.stroke();
-          // bump: lighter = taller
           bc.strokeStyle = `hsl(0,0%,${60 + Math.random() * 35}%)`;
           bc.lineWidth = 0.8;
           bc.beginPath(); bc.moveTo(gx, gy+h); bc.lineTo(gx, gy); bc.stroke();
         }
-        // Cherry blossom petals on ground
         for (let i = 0; i < 600; i++) {
           const px2 = Math.random()*S, py2 = Math.random()*S;
-          const r2  = 2 + Math.random() * 4;
+          const r2 = 2 + Math.random() * 4;
           cc.fillStyle = Math.random() > 0.5 ? 'rgba(249,168,212,0.7)' : 'rgba(251,207,232,0.6)';
           cc.beginPath(); cc.ellipse(px2,py2,r2,r2*0.5,Math.random()*Math.PI,0,Math.PI*2); cc.fill();
         }
@@ -257,10 +238,9 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
       } else if (season === 'summer') {
         cc.fillStyle = '#1a3d1a'; cc.fillRect(0, 0, S, S);
         bc.fillStyle = '#444';    bc.fillRect(0, 0, S, S);
-        // Very dense, tall dark grass
         for (let i = 0; i < 12000; i++) {
           const gx = Math.random()*S, gy = Math.random()*S;
-          const h  = 10 + Math.random() * 24;
+          const h = 10 + Math.random() * 24;
           const hue = 108 + Math.random() * 24;
           const lit = 16 + Math.random() * 18;
           cc.strokeStyle = `hsl(${hue},65%,${lit}%)`;
@@ -272,7 +252,6 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
           bc.strokeStyle = `hsl(0,0%,${50 + Math.random() * 40}%)`;
           bc.lineWidth = 0.6; bc.beginPath(); bc.moveTo(gx,gy+h); bc.lineTo(gx,gy); bc.stroke();
         }
-        // Yellow & purple wildflowers
         for (let i = 0; i < 300; i++) {
           const fx = Math.random()*S, fy = Math.random()*S;
           cc.fillStyle = Math.random() > 0.5 ? 'rgba(250,204,21,0.9)' : 'rgba(167,139,250,0.85)';
@@ -282,14 +261,12 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
       } else if (season === 'autumn') {
         cc.fillStyle = '#5c3d1e'; cc.fillRect(0, 0, S, S);
         bc.fillStyle = '#555';    bc.fillRect(0, 0, S, S);
-        // Earth cracks / texture
         for (let i = 0; i < 300; i++) {
           const ex = Math.random()*S, ey = Math.random()*S;
           cc.strokeStyle = `rgba(40,20,5,0.4)`;
           cc.lineWidth = 0.5 + Math.random()*1.5;
           cc.beginPath(); cc.moveTo(ex,ey); cc.lineTo(ex+(Math.random()-0.5)*20, ey+(Math.random()-0.5)*20); cc.stroke();
         }
-        // Fallen leaves (ellipses in autumn palette)
         const leafC = ['#ef4444','#f97316','#eab308','#b45309','#dc2626','#d97706','#92400e'];
         for (let i = 0; i < 1800; i++) {
           const lx = Math.random()*S, ly = Math.random()*S;
@@ -302,20 +279,17 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
         }
         cc.globalAlpha = 1;
 
-      } else { // winter
+      } else {
         cc.fillStyle = '#dbeafe'; cc.fillRect(0, 0, S, S);
         bc.fillStyle = '#aaa';    bc.fillRect(0, 0, S, S);
-        // Bright snow base with blue shadow dips
         for (let i = 0; i < 1500; i++) {
           const sx2 = Math.random()*S, sy2 = Math.random()*S;
-          const r2  = 3 + Math.random() * 12;
+          const r2 = 3 + Math.random() * 12;
           cc.fillStyle = Math.random()>0.6 ? 'rgba(255,255,255,0.9)' : 'rgba(186,220,240,0.5)';
           cc.beginPath(); cc.arc(sx2,sy2,r2,0,Math.PI*2); cc.fill();
-          // bump: brighter = higher snow mounds
           bc.fillStyle = `hsl(0,0%,${55 + Math.random() * 45}%)`;
           bc.beginPath(); bc.arc(sx2,sy2,r2,0,Math.PI*2); bc.fill();
         }
-        // Sparkle / ice crystal highlights
         for (let i = 0; i < 200; i++) {
           const sx2 = Math.random()*S, sy2 = Math.random()*S;
           cc.fillStyle = 'rgba(220,245,255,0.95)';
@@ -336,7 +310,6 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
       cache[season] = { colorTex, bumpTex };
     }
 
-    // Apply textures to ground material
     if (groundMeshRef.current) {
       const mat = groundMeshRef.current.material;
       const { colorTex, bumpTex } = cache[season];
@@ -347,11 +320,10 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
       mat.displacementScale = season === 'winter' ? 0.22 : 0.30;
       mat.roughness       = season === 'winter' ? 0.35 : 0.88;
       mat.metalness       = season === 'winter' ? 0.15 : 0.02;
-      mat.color.setHex(0xffffff); // let the texture carry the color
-      mat.needsUpdate     = true;
+      mat.color.setHex(0xffffff);
+      mat.needsUpdate = true;
     }
 
-    // Remove any old box props
     if (groundPropsRef.current) {
       scene.remove(groundPropsRef.current);
       groundPropsRef.current.geometry.dispose();
@@ -359,7 +331,6 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
       groundPropsRef.current = null;
     }
 
-    // 3. Weather Particles
     if (particlesRef.current) {
       scene.remove(particlesRef.current);
       particlesRef.current.geometry.dispose();
@@ -367,19 +338,23 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
       particlesRef.current = null;
     }
 
-    const count = season === "autumn" ? 350 : 250;
+    // Reduce particle count on mobile for better FPS
+    const count = isMobile
+      ? (season === "autumn" ? 120 : 80)
+      : (season === "autumn" ? 350 : 250);
+
     const positions = new Float32Array(count * 3);
     for (let i = 0; i < count * 3; i += 3) {
-      positions[i] = (Math.random() - 0.5) * 32;
-      positions[i + 1] = Math.random() * 28;
-      positions[i + 2] = (Math.random() - 0.5) * 32;
+      positions[i]   = (Math.random() - 0.5) * 32;
+      positions[i+1] = Math.random() * 28;
+      positions[i+2] = (Math.random() - 0.5) * 32;
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
     const colorMap = { spring: 0xffb7d5, summer: 0xfde68a, autumn: 0x7dd3fc, winter: 0xf1f5f9 };
-    const sizeMap = { spring: 0.28, summer: 0.18, autumn: 0.15, winter: 0.22 };
-    const speedMap = { spring: 0.05, summer: 0.02, autumn: 0.25, winter: 0.04 };
+    const sizeMap  = { spring: 0.28,     summer: 0.18,     autumn: 0.15,     winter: 0.22 };
+    const speedMap = { spring: 0.05,     summer: 0.02,     autumn: 0.25,     winter: 0.04 };
 
     const mat = new THREE.PointsMaterial({
       color: colorMap[season] ?? 0xffb7d5,
@@ -390,7 +365,7 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
     });
 
     const pts = new THREE.Points(geo, mat);
-    pts.userData.speed = speedMap[season] ?? 0.06;
+    pts.userData.speed  = speedMap[season] ?? 0.06;
     pts.userData.isRain = season === "autumn";
     scene.add(pts);
     particlesRef.current = pts;
@@ -410,28 +385,43 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
 
     if (!voxels || voxels.length === 0) return;
 
-    const boxSize = 0.38;
+    // Slightly oversized box (0.395 > voxel spacing 0.38) fills micro-gaps cleanly
+    const boxSize = 0.395;
     const geo = new THREE.BoxGeometry(boxSize, boxSize, boxSize);
-    const mat = new THREE.MeshLambertMaterial();
+
+    // MeshBasicMaterial: ignores all lighting → every voxel face shows the exact
+    // photo color with zero shading artifacts. Top-down view looks like the photo.
+    const mat = new THREE.MeshBasicMaterial();
     const count = voxels.length;
 
     const mesh = new THREE.InstancedMesh(geo, mat, count);
     mesh.frustumCulled = false;
 
     const dummy = new THREE.Object3D();
-    const col = new THREE.Color();
+    const col   = new THREE.Color();
+
+    // Precompute max height for height-based ambient occlusion (fake depth from side view)
+    let maxTargetY = 0;
+    for (const v of voxels) {
+      if (v.targetY > maxTargetY) maxTargetY = v.targetY;
+    }
+    if (maxTargetY === 0) maxTargetY = 1;
 
     for (let i = 0; i < count; i++) {
-      const v = voxels[i];
+      const v    = voxels[i];
       const posY = isFlat ? 0 : v.targetY;
       dummy.position.set(v.x, posY, v.z);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
 
+      // Height-based AO: bottom voxels 55% brightness → top voxels 100%
+      // Gives 3D depth from side view without directional light fighting photo colors.
+      // From top, topmost voxels are all at ~100% so colors match the photo perfectly.
+      const ao = 0.55 + 0.45 * (v.targetY / maxTargetY);
       col.setRGB(
-        Math.max(0, Math.min(1, v.color.r)),
-        Math.max(0, Math.min(1, v.color.g)),
-        Math.max(0, Math.min(1, v.color.b))
+        Math.max(0, Math.min(1, v.color.r * ao)),
+        Math.max(0, Math.min(1, v.color.g * ao)),
+        Math.max(0, Math.min(1, v.color.b * ao))
       );
       mesh.setColorAt(i, col);
     }
@@ -446,8 +436,7 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
   return (
     <div
       ref={containerRef}
-      style={{ width: "100%", height: "100%" }}
-      className="cursor-grab active:cursor-grabbing"
+      className="relative w-full h-full cursor-grab active:cursor-grabbing select-none"
     />
   );
 });
