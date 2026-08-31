@@ -1,228 +1,401 @@
 /**
- * PhotoTree voxel tree generator.
+ * PhotoTree — True Recursive Branching Tree Generator
  *
- * Architecture: each (x,z) column may have MULTIPLE Y-segments (trunk + multiple canopy tiers).
- * This allows tiered shapes like Maple (4 disc layers) or Cedar (3 platform layers).
+ * How it works:
+ *   1. Grow a trunk upward from y=0 with a subtle wiggle
+ *   2. Spawn PRIMARY branches at DIFFERENT heights along the trunk (not all at the top)
+ *      - Branches starting LOW on the trunk angle steeply upward (to reach canopy)
+ *      - Branches starting HIGH spread more horizontally
+ *   3. Each branch recurses: it spawns 1-3 CHILD branches at random points along itself
+ *      - Children diverge in angle, shrink in size, and may angle differently
+ *      - Recursion depth: 1 (primary) → 2 (secondary) → 3 (tertiary twig)
+ *   4. Every branch endpoint gets a foliage blob (photo colors from the grid)
+ *      - Terminal nodes get full-size blobs
+ *      - Intermediate nodes get small blobs (natural foliage along the branch)
+ *   5. Foliage overwrites bark at the same position → top view shows the photo
+ *   6. Trunk base (well below canopy) always stays brown → visible from the side
  *
- * Top-down constraint: the TOPMOST voxel in each column gets the exact photo pixel color.
+ *  Result: organic uneven height, visible trunk, real recursive branch structure,
+ *  full top-down photo coverage through branch spread and overlapping blobs.
  */
 
+const VS    = 0.38;
+const PI2   = Math.PI * 2;
+
+// ─── Shape Registry ─────────────────────────────────────────────────────────
 export const TREE_SHAPES = [
-  { id: 'sakura', name: 'Sakura',   icon: '🌸' },
+  { id: 'sakura', name: 'Sakura',    icon: '🌸' },
   { id: 'oak',    name: 'Grand Oak', icon: '🌳' },
   { id: 'pine',   name: 'Pine',      icon: '🌲' },
   { id: 'maple',  name: 'Maple',     icon: '🍁' },
   { id: 'cedar',  name: 'Cedar',     icon: '🌴' },
-  { id: 'flower', name: 'Flower',    icon: '🌺' },
+  { id: 'birch',  name: 'Birch',     icon: '🪵' },
 ];
 
 export function getRandomTreeShape() {
   return TREE_SHAPES[Math.floor(Math.random() * TREE_SHAPES.length)].id;
 }
 
-function sn(x, z, s) {                                       // seeded noise helper
-  return Math.sin(x * 0.53 + s * 2.1) * Math.cos(z * 0.47 + s * 1.7);
-}
-
-export function generateTreeVoxels(pixelGrid, shape = 'sakura', seed = Math.random()) {
+// ─── Main Generator ──────────────────────────────────────────────────────────
+export function generateTreeVoxels(pixelGrid, shape = 'sakura') {
   if (!pixelGrid || pixelGrid.length === 0) return [];
 
-  const W  = pixelGrid.length;
-  const D  = pixelGrid[0].length;
-  const cx = (W - 1) / 2;
-  const cz = (D - 1) / 2;
-  const R  = Math.min(W, D) * 0.46;
-  const VS = 0.38;
+  const R  = pixelGrid.length;
+  const cx = (R - 1) / 2;
+  const cz = (R - 1) / 2;
 
-  // Per-shape trunk config
-  const CFG = {
-    pine:   { trunkH: 4,  trunkR: 1.6 },
-    oak:    { trunkH: 14, trunkR: 2.8 },
-    sakura: { trunkH: 10, trunkR: 2.2 },
-    maple:  { trunkH: 11, trunkR: 2.0 },
-    cedar:  { trunkH: 12, trunkR: 2.8 },
-    flower: { trunkH:  3, trunkR: 1.2 },
+  // Voxel store — later writes overwrite earlier ones at the same position.
+  // Ordering: bark first, foliage last → photo shows from top, bark from sides.
+  const voxelMap = new Map();
+
+  const place = (gx, gy, gz, color) => {
+    gx = Math.round(gx); gy = Math.round(gy); gz = Math.round(gz);
+    if (gy < 0) return;
+    voxelMap.set(`${gx},${gy},${gz}`, {
+      x:       (gx - cx) * VS,
+      y:       gy,
+      z:       (gz - cz) * VS,
+      targetY: gy * VS,
+      color,
+    });
   };
-  const cfg = CFG[shape] ?? CFG.sakura;
 
-  const voxels = [];
-  const SHELL  = 2;
+  const photo = (gx, gz) => {
+    const xi = Math.max(0, Math.min(R - 1, Math.round(gx)));
+    const zi = Math.max(0, Math.min(R - 1, Math.round(gz)));
+    const p  = pixelGrid[xi][zi];
+    return { r: p.r, g: p.g, b: p.b };
+  };
 
-  for (let x = 0; x < W; x++) {
-    for (let z = 0; z < D; z++) {
-      const dx   = x - cx;
-      const dz   = z - cz;
-      const dist = Math.sqrt(dx * dx + dz * dz);
-      const ang  = Math.atan2(dz, dx);
-      const norm = dist / R;
+  const BARK_COLS = [
+    { r: 0.34, g: 0.21, b: 0.11 },
+    { r: 0.41, g: 0.27, b: 0.14 },
+    { r: 0.28, g: 0.17, b: 0.09 },
+    { r: 0.47, g: 0.32, b: 0.17 },
+  ];
+  const BARK_BIRCH = { r: 0.75, g: 0.71, b: 0.63 };
+  const barkCol = () => shape === 'birch'
+    ? BARK_BIRCH
+    : BARK_COLS[Math.floor(Math.random() * BARK_COLS.length)];
 
-      const pixel = pixelGrid[x][z];
-      if (!pixel || pixel.a < 0.1) continue;
+  const p = shapeParams(shape, R);
 
-      const inTrunk  = dist <= cfg.trunkR;
-      const skyBase  = cfg.trunkH;            // canopy starts at trunk top
+  // ══════════════════════════════════════════════════════════════════════
+  // PHASE 1 — TRUNK
+  // Tapered wiggling column from y=0 up to trunkH.
+  // ══════════════════════════════════════════════════════════════════════
+  let twx = cx, twz = cz;
 
-      // ── Y-segments this column will fill ──────────────────────────
-      // Each segment = { min, max }.  Trunk segment added below if applicable.
-      const segs = [];
+  for (let y = 0; y <= p.trunkH; y++) {
+    const t = y / Math.max(1, p.trunkH);
+    const r = p.trunkBaseR * (1 - t) + p.trunkTopR * t;
+    twx += (Math.random() - 0.5) * 0.20;  twx = cx + (twx - cx) * 0.84;
+    twz += (Math.random() - 0.5) * 0.20;  twz = cz + (twz - cz) * 0.84;
+    disc(twx, y, twz, r, (gx, gy, gz) => place(gx, gy, gz, barkCol()));
+  }
 
-      switch (shape) {
+  const tipX = twx, tipZ = twz;
 
-        // ── PINE: stepped conical tiers going all the way to the ground ──
-        case 'pine': {
-          if (dist <= R) {
-            const t    = Math.max(0, 1 - norm);
-            const raw  = skyBase + Math.pow(t, 0.72) * R * 1.85;
-            const STEP = 3;
-            const top  = Math.ceil(raw / STEP) * STEP + Math.round(sn(x, z, seed) * 0.5);
-            // Canopy nearly touches ground at outer edge
-            const bot  = inTrunk ? 0 : Math.max(skyBase, top - STEP);
-            segs.push({ min: bot, max: top });
-          }
-          break;
-        }
+  // ══════════════════════════════════════════════════════════════════════
+  // PHASE 2 — RECURSIVE BRANCH SYSTEM
+  //
+  // Spawn primary branches at DIFFERENT heights along the trunk.
+  // Each one recursively generates sub-branches and tertiary twigs.
+  // No two branches are at the same height.
+  // ══════════════════════════════════════════════════════════════════════
+  const numMain = p.numMain;
 
-        // ── OAK: clear lollipop – wide spreading dome high above trunk ──
-        case 'oak': {
-          if (dist <= R) {
-            const dome  = Math.sqrt(Math.max(0, 1 - norm * norm));
-            const bumps = Math.sin(ang * 5 + seed * 9) * 2.2 + Math.cos(ang * 3 + seed * 5) * 1.5;
-            const top   = Math.round(skyBase + dome * R * 1.35 + bumps);
-            const bot   = inTrunk ? 0 : skyBase;
-            if (top > 0) segs.push({ min: bot, max: top });
-          }
-          break;
-        }
+  for (let i = 0; i < numMain; i++) {
+    // Evenly distribute angles around the trunk (with per-branch jitter)
+    const baseAngle  = (i / numMain) * PI2;
+    const angleJitter = (Math.random() - 0.5) * (PI2 / numMain) * 0.75;
+    const angle      = baseAngle + angleJitter;
 
-        // ── SAKURA: three overlapping cloud puffs above trunk ──
-        case 'sakura': {
-          if (dist <= R) {
-            const base = Math.sqrt(Math.max(0, 1 - norm * norm)) * R * 0.9;
-            const p1   = (sn(dx,       dz,       seed)       + 1) * 2.8;
-            const p2   = (sn(dx * 0.6, dz * 0.6, seed + 0.5) + 1) * 2.0;
-            const p3   = (sn(dx * 0.35,dz * 0.35,seed + 1.2) + 1) * 1.4;
-            const top  = Math.round(skyBase + base + p1 + p2 + p3);
-            const floorOffset = norm < 0.5 ? base * 0.2 : 0;
-            const bot  = inTrunk ? 0 : Math.round(skyBase + floorOffset);
-            if (top > 0) segs.push({ min: bot, max: top });
-          }
-          break;
-        }
+    // ── KEY: each branch starts at a DIFFERENT height on the trunk ──
+    // Divide [0.30 .. 0.95] of trunkH into numMain non-uniform slots
+    // so branches are well-spread vertically, not all at the same level.
+    const slotSize   = 0.65 / numMain;
+    const slotBase   = 0.30 + i * slotSize;
+    const heightFrac = slotBase + Math.random() * slotSize; // within slot
+    const oy         = p.trunkH * heightFrac;
 
-        // ── MAPLE: 4 spreading horizontal tier discs ──────────────────
-        // Each tier is a flat disc of foliage at a specific height.
-        // Tiers get narrower going up → distinctive layered silhouette.
-        case 'maple': {
-          const TIERS = [
-            { h: skyBase + 0,  r: R * 0.92, thick: 3 },
-            { h: skyBase + 5,  r: R * 0.74, thick: 3 },
-            { h: skyBase + 9,  r: R * 0.54, thick: 3 },
-            { h: skyBase + 13, r: R * 0.28, thick: 3 },
-          ];
-          for (const tier of TIERS) {
-            if (dist <= tier.r) {
-              const noise  = sn(dx, dz, seed + tier.h * 0.1) * 1.2;
-              const tBot   = Math.round(tier.h);
-              const tTop   = Math.round(tier.h + tier.thick + noise);
-              // Only include trunk in the very bottom of the first segment
-              const segBot = (inTrunk && tBot === skyBase) ? 0 : tBot;
-              segs.push({ min: segBot, max: tTop });
-            }
-          }
-          break;
-        }
+    // Branch origin: on the trunk surface at that height
+    const ox = tipX + Math.cos(angle) * p.trunkTopR * 0.70;
+    const oz = tipZ + Math.sin(angle) * p.trunkTopR * 0.70;
 
-        // ── CEDAR: 3 wide flat platform layers (umbrella / tabletop) ─
-        // First platform is VERY wide, subsequent ones narrower at top.
-        // Creates a flat-topped cedar/baobab silhouette.
-        case 'cedar': {
-          const TIERS = [
-            { h: skyBase + 0,  r: R * 1.00, thick: 2.5 },  // widest, lowest
-            { h: skyBase + 5,  r: R * 0.72, thick: 2.5 },  // mid
-            { h: skyBase + 9,  r: R * 0.42, thick: 2.5 },  // upper
-            { h: skyBase + 13, r: R * 0.18, thick: 2   },  // apex
-          ];
-          for (const tier of TIERS) {
-            if (dist <= tier.r) {
-              const noise  = sn(dx, dz, seed + tier.h * 0.12) * 0.8;
-              const tBot   = Math.round(tier.h);
-              const tTop   = Math.round(tier.h + tier.thick + noise);
-              const segBot = (inTrunk && tBot === skyBase) ? 0 : tBot;
-              segs.push({ min: segBot, max: tTop });
-            }
-          }
-          break;
-        }
+    // Up-angle: branches starting LOWER are steeper (reach up to canopy level).
+    // Branches starting near the TOP spread more horizontally.
+    const radFrac   = 1 - heightFrac;
+    const upAngle   = 0.15 + radFrac * 0.90 + (Math.random() - 0.5) * 0.20;
 
-        // ── FLOWER: 6-petal open bloom ────────────────────────────────
-        case 'flower': {
-          const PETALS = 6;
-          const pw = Math.sin(ang * PETALS) * 0.38 + 0.62;
-          if (dist <= R * pw) {
-            const isCenter = dist < R * 0.22;
-            if (isCenter) {
-              segs.push({ min: inTrunk ? 0 : skyBase, max: Math.round(skyBase + R * 0.55) });
-            } else {
-              const t   = dist / (R * pw);
-              const top = Math.round(skyBase + Math.sin(t * Math.PI) * R * 0.5);
-              const bot = Math.max(1, top - 4);
-              segs.push({ min: bot, max: top });
-            }
-          }
-          break;
-        }
-      }
+    // Length: longer for lower branches (they need to reach further out)
+    // Cap at 1.30× so branches don't fly way past the disc boundary
+    const lenMult   = Math.min(1.30, 0.80 + radFrac * 0.65 + Math.random() * 0.45);
+    const length    = p.mainLen * lenMult;
 
-      if (segs.length === 0) continue;
+    // Thickness scales with length (thicker for bigger branches)
+    const thickness = p.branchR * (0.8 + radFrac * 0.5);
 
-      // Overall top = max of all segments
-      const overallTop = Math.max(...segs.map(s => s.max));
-      if (overallTop <= 0) continue;
+    // Recurse
+    branchNode({
+      ox, oy, oz,
+      angle, upAngle,
+      length, thickness,
+      depth: 1,
+      maxDepth: p.maxDepth,
+      p,
+      place, barkCol, photo,
+    });
+  }
 
-      // Build a fast "is Y in any segment" lookup using a Set
-      const activeY = new Set();
-      for (const seg of segs) {
-        for (let y = seg.min; y <= seg.max; y++) {
-          // Shell optimization: only keep top, bottom, trunk, and every 2nd interior
-          const isSegTop = y === seg.max;
-          const isSegBot = y === seg.min;
-          const isTr     = inTrunk && y <= cfg.trunkH;
-          if (isSegTop || isSegBot || isTr || y % SHELL === 0) {
-            activeY.add(y);
-          }
-        }
-      }
-      // Always include the overall top voxel (carries photo color)
-      activeY.add(overallTop);
+  // ── Central crown blob: covers the trunk top with photo colors so
+  //    the top-down view shows the photo at the center, not bare bark.
+  const crownY = p.trunkH + p.mainLen * 0.18;
+  drawFoliage(tipX, crownY, tipZ, p.blobR * 1.30, photo, place);
 
-      for (const y of [...activeY].sort((a, b) => a - b)) {
-        const isTop   = y === overallTop;
-        const isTrunk = inTrunk && y <= cfg.trunkH;
-
-        let color;
-        if (isTop) {
-          color = { r: pixel.r, g: pixel.g, b: pixel.b };
-        } else if (isTrunk) {
-          const bF = 0.20 + (y / (cfg.trunkH || 1)) * 0.18;
-          color = { r: bF * 1.4, g: bF * 0.72, b: bF * 0.42 };
-        } else {
-          // Find which segment this Y belongs to, then shade by depth within it
-          const seg = segs.find(s => y >= s.min && y <= s.max) ?? segs[0];
-          const f = 0.28 + 0.68 * ((y - seg.min) / (seg.max - seg.min || 1));
-          color = { r: pixel.r * f, g: pixel.g * f, b: pixel.b * f };
-        }
-
-        voxels.push({
-          x:       (x - cx) * VS,
-          y:       y * VS,
-          z:       (z - cz) * VS,
-          targetY: y * VS,
-          gridX: x, gridZ: z,
-          color, isTop, isTrunk,
-        });
-      }
-    }
+  // ══════════════════════════════════════════════════════════════════════
+  // PHASE 3 — HEIGHT-BASED AO
+  // ══════════════════════════════════════════════════════════════════════
+  const voxels = [...voxelMap.values()];
+  let maxY = 0;
+  for (const v of voxels) if (v.y > maxY) maxY = v.y;
+  if (maxY === 0) maxY = 1;
+  for (const v of voxels) {
+    const ao = 0.52 + 0.48 * (v.y / maxY);
+    v.color = {
+      r: Math.min(1, v.color.r * ao),
+      g: Math.min(1, v.color.g * ao),
+      b: Math.min(1, v.color.b * ao),
+    };
   }
 
   return voxels;
+}
+
+// ─── Recursive Branch Node ────────────────────────────────────────────────────
+//
+// Draws one branch segment from (ox,oy,oz) in direction (angle, upAngle) for
+// `length` grid units. Then recursively spawns 1-3 child branches from random
+// points ALONG this segment, each diverging in direction and shrinking in size.
+//
+function branchNode({ ox, oy, oz, angle, upAngle, length, thickness, depth, maxDepth, p, place, barkCol, photo }) {
+  // Compute endpoint
+  const ex = ox + Math.cos(angle)  * Math.cos(upAngle) * length;
+  const ey = oy + Math.sin(upAngle) * length;
+  const ez = oz + Math.sin(angle)  * Math.cos(upAngle) * length;
+
+  // Draw the branch segment as a tapered cylinder
+  drawBranch(ox, oy, oz, ex, ey, ez, thickness, thickness * 0.38,
+             (gx, gy, gz) => place(gx, gy, gz, barkCol()));
+
+  // ── Small foliage blobs along the branch body ────────────────────────────
+  // Placed every ~blobR*0.9 units along the branch, sized at ~35% of terminal blob.
+  // This fills the canopy interior between branch tips (fixes top-view gaps)
+  // without dominating the visual — bark placed BEFORE foliage still peeks through.
+  const segLen = Math.sqrt((ex-ox)**2 + (ey-oy)**2 + (ez-oz)**2);
+  const bodyStep = p.blobR * 1.0;
+  const numBody  = Math.max(0, Math.floor(segLen / bodyStep) - 1);
+  for (let b = 1; b <= numBody; b++) {
+    const t  = b / (numBody + 1);
+    const bx = ox + (ex - ox) * t;
+    const by = oy + (ey - oy) * t;
+    const bz = oz + (ez - oz) * t;
+    // Smaller blobs for intermediate nodes — about 38% of terminal size
+    drawFoliage(bx, by, bz, p.blobR * 0.38, photo, place);
+  }
+
+  // ── Foliage at this node's endpoint ──────────────────────────────────────
+  // Terminal nodes get full-size blobs; intermediate nodes get small ones
+  // (foliage patches along the branch — like leaves partway up a real branch).
+  const isTerminal = depth >= maxDepth;
+  const blobR = isTerminal
+    ? p.blobR * (0.85 + Math.random() * 0.35)    // full-size at tip
+    : p.blobR * (0.35 + Math.random() * 0.25);   // small intermediate cluster
+
+  // Foliage written LAST → overwrites bark → photo shows from above
+  drawFoliage(ex, ey, ez, blobR, photo, place);
+
+  if (isTerminal) return;
+
+  // ── Spawn child branches ──────────────────────────────────────────────────
+  // Random number of children: 1-3 (weighted toward 2)
+  const numChildren = Math.random() < 0.15 ? 1    // single (rare)
+                    : Math.random() < 0.45 ? 2    // pair (common)
+                    : 3;                           // triple (occasional)
+
+  for (let c = 0; c < numChildren; c++) {
+    // Probability of actually spawning this child decreases with depth
+    const spawnProb = depth === 1 ? 0.95
+                    : depth === 2 ? 0.80
+                    : 0.55;
+    if (Math.random() > spawnProb) continue;
+
+    // Where along the parent does this child branch off?
+    // Children branch off anywhere from 30% to 100% along the parent.
+    // Multiple children spread out along the parent (not all at the same spot).
+    const branchT = 0.30 + (c / Math.max(1, numChildren - 1)) * 0.50
+                   + (Math.random() - 0.5) * 0.20;
+    const clampedT = Math.max(0.25, Math.min(0.95, branchT));
+
+    const sx = ox + (ex - ox) * clampedT;
+    const sy = oy + (ey - oy) * clampedT;
+    const sz = oz + (ez - oz) * clampedT;
+
+    // Child direction: diverges from parent with some randomness.
+    // - Angle diverges left or right (more divergence at deeper levels)
+    // - Up-angle increases slightly (branches grow upward as they get smaller)
+    const divergence  = 0.55 + depth * 0.25;
+    const childAngle  = angle + (Math.random() - 0.5) * divergence * 2.2;
+    const childUp     = upAngle + (Math.random() * 0.35) + 0.05;
+
+    // Child length: 40-75% of parent (shrinks with depth)
+    const childLen    = length * (0.38 + Math.random() * 0.38);
+
+    // Child thickness: 40-60% of parent (tapering)
+    const childThick  = thickness * (0.40 + Math.random() * 0.22);
+
+    branchNode({
+      ox: sx, oy: sy, oz: sz,
+      angle: childAngle,
+      upAngle: childUp,
+      length: childLen,
+      thickness: childThick,
+      depth: depth + 1,
+      maxDepth,
+      p,
+      place, barkCol, photo,
+    });
+  }
+}
+
+// ─── Geometry Helpers ────────────────────────────────────────────────────────
+
+function disc(cx, y, cz, r, fn) {
+  const ri = Math.ceil(r);
+  const iy = Math.round(y);
+  for (let dx = -ri; dx <= ri; dx++) {
+    for (let dz = -ri; dz <= ri; dz++) {
+      if (dx * dx + dz * dz <= r * r + 0.5)
+        fn(Math.round(cx) + dx, iy, Math.round(cz) + dz);
+    }
+  }
+}
+
+function drawBranch(x1, y1, z1, x2, y2, z2, r1, r2, fn) {
+  const dx   = x2 - x1, dy = y2 - y1, dz = z2 - z1;
+  const len  = Math.sqrt(dx*dx + dy*dy + dz*dz);
+  if (len < 0.1) return;
+  const steps = Math.max(3, Math.ceil(len * 1.8));
+
+  for (let s = 0; s <= steps; s++) {
+    const t  = s / steps;
+    const px = x1 + dx * t, py = y1 + dy * t, pz = z1 + dz * t;
+    const r  = r1 + (r2 - r1) * t;
+    const ri = Math.ceil(r);
+    const iy = Math.round(py);
+    for (let ddx = -ri; ddx <= ri; ddx++) {
+      for (let ddz = -ri; ddz <= ri; ddz++) {
+        if (ddx*ddx + ddz*ddz <= r*r + 0.5)
+          fn(Math.round(px + ddx), iy, Math.round(pz + ddz));
+      }
+    }
+  }
+}
+
+function drawFoliage(cx, cy, cz, radius, photoFn, placeFn) {
+  const rX  = radius;
+  const rY  = radius * 0.68;
+  const rXi = Math.ceil(rX);
+  const rYi = Math.ceil(rY);
+  const DENSITY = 0.72;
+
+  for (let dx = -rXi; dx <= rXi; dx++) {
+    for (let dy = -rYi; dy <= rYi; dy++) {
+      for (let dz = -rXi; dz <= rXi; dz++) {
+        const noise = 0.82 + Math.random() * 0.36;
+        const dist  = (dx*dx)/(rX*rX) + (dy*dy)/(rY*rY) + (dz*dz)/(rX*rX);
+        if (dist < noise && Math.random() < DENSITY) {
+          const gx = Math.round(cx + dx);
+          const gy = Math.round(cy + dy);
+          const gz = Math.round(cz + dz);
+          placeFn(gx, gy, gz, photoFn(gx, gz));
+        }
+      }
+    }
+  }
+}
+
+// ─── Per-shape Parameters ────────────────────────────────────────────────────
+
+function shapeParams(shape, R) {
+  switch (shape) {
+
+    case 'sakura': return {
+      trunkH:     Math.round(R * 0.62),   // tall visible trunk
+      trunkBaseR: R * 0.078,              // thick at base
+      trunkTopR:  R * 0.028,
+      numMain:    7 + Math.floor(Math.random() * 3),  // 7-9
+      maxDepth:   3,
+      mainLen:    R * 0.48,               // long spreading branches
+      branchR:    R * 0.042,              // substantial thickness
+      blobR:      R * 0.200,             // large fluffy sakura clouds
+    };
+
+    case 'oak': return {
+      trunkH:     Math.round(R * 0.72),
+      trunkBaseR: R * 0.090,
+      trunkTopR:  R * 0.034,
+      numMain:    8 + Math.floor(Math.random() * 3),
+      maxDepth:   3,
+      mainLen:    R * 0.44,
+      branchR:    R * 0.050,
+      blobR:      R * 0.175,
+    };
+
+    case 'pine': return {
+      trunkH:     Math.round(R * 0.95),   // very tall pine
+      trunkBaseR: R * 0.058,
+      trunkTopR:  R * 0.016,
+      numMain:    11 + Math.floor(Math.random() * 4),
+      maxDepth:   2,
+      mainLen:    R * 0.32,
+      branchR:    R * 0.028,
+      blobR:      R * 0.115,
+    };
+
+    case 'maple': return {
+      trunkH:     Math.round(R * 0.65),
+      trunkBaseR: R * 0.082,
+      trunkTopR:  R * 0.030,
+      numMain:    8 + Math.floor(Math.random() * 3),
+      maxDepth:   3,
+      mainLen:    R * 0.46,
+      branchR:    R * 0.044,
+      blobR:      R * 0.190,
+    };
+
+    case 'cedar': return {
+      trunkH:     Math.round(R * 0.85),
+      trunkBaseR: R * 0.068,
+      trunkTopR:  R * 0.020,
+      numMain:    10 + Math.floor(Math.random() * 4),
+      maxDepth:   2,
+      mainLen:    R * 0.44,
+      branchR:    R * 0.032,
+      blobR:      R * 0.140,
+    };
+
+    case 'birch': return {
+      trunkH:     Math.round(R * 0.80),
+      trunkBaseR: R * 0.050,
+      trunkTopR:  R * 0.016,
+      numMain:    6 + Math.floor(Math.random() * 3),
+      maxDepth:   3,
+      mainLen:    R * 0.36,
+      branchR:    R * 0.026,
+      blobR:      R * 0.155,
+    };
+
+    default: return shapeParams('oak', R);
+  }
 }

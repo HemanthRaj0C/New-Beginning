@@ -30,12 +30,12 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
 
       cam.up.set(0, 1, 0);
       gsap.to(cam.position, {
-        x: 0, y: 45, z: 0.0001,
+        x: 0, y: 50, z: 0.0001,
         duration: 1.2, ease: "power2.inOut",
         onUpdate: () => ctrl.update(),
       });
       gsap.to(ctrl.target, {
-        x: 0, y: 0, z: 0,
+        x: 0, y: 8, z: 0,   // center on canopy, not the ground
         duration: 1.2, ease: "power2.inOut",
         onUpdate: () => ctrl.update(),
       });
@@ -66,7 +66,7 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
 
       cam.up.set(0, 1, 0);
       gsap.to(cam.position, {
-        x: 22, y: 22, z: 22,
+        x: 28, y: 22, z: 28,
         duration: 1.2, ease: "power2.inOut",
         onUpdate: () => ctrl.update(),
       });
@@ -91,8 +91,9 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
     scene.background = new THREE.Color(0x0a0d16);
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(48, width / height, 0.1, 1000);
-    camera.position.set(22, 22, 22);
+    const camera = new THREE.PerspectiveCamera(52, width / height, 0.1, 1000);
+    // Start zoomed out enough to see the whole tree + disc from a nice isometric angle
+    camera.position.set(28, 22, 28);
     camera.lookAt(0, 5, 0);
     cameraRef.current = camera;
 
@@ -352,21 +353,42 @@ const VoxelCanvas = forwardRef(function VoxelCanvas(
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
 
-    const colorMap = { spring: 0xffb7d5, summer: 0xfde68a, autumn: 0x7dd3fc, winter: 0xf1f5f9 };
-    const sizeMap  = { spring: 0.28,     summer: 0.18,     autumn: 0.15,     winter: 0.22 };
-    const speedMap = { spring: 0.05,     summer: 0.02,     autumn: 0.25,     winter: 0.04 };
+    // Build a soft radial gradient canvas for circular particles (no square pixels)
+    const ptCanvas = document.createElement('canvas');
+    ptCanvas.width = ptCanvas.height = 64;
+    const ptCtx = ptCanvas.getContext('2d');
+    const grad = ptCtx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0,   'rgba(255,255,255,1.0)');
+    grad.addColorStop(0.35,'rgba(255,255,255,0.85)');
+    grad.addColorStop(0.70,'rgba(255,255,255,0.30)');
+    grad.addColorStop(1.0, 'rgba(255,255,255,0.00)');
+    ptCtx.fillStyle = grad;
+    ptCtx.beginPath(); ptCtx.arc(32,32,32,0,Math.PI*2); ptCtx.fill();
+    const ptTex = new THREE.CanvasTexture(ptCanvas);
+
+    const particleColors = {
+      spring: 0xffadd2,   // soft cherry-blossom pink
+      summer: 0xfde68a,   // warm golden pollen
+      autumn: 0x93c5fd,   // sky-blue rain
+      winter: 0xe0f2fe,   // icy white
+    };
+    const sizeMap  = { spring: 0.38, summer: 0.28, autumn: 0.22, winter: 0.32 };
+    const speedMap = { spring: 0.05, summer: 0.02, autumn: 0.28, winter: 0.04 };
 
     const mat = new THREE.PointsMaterial({
-      color: colorMap[season] ?? 0xffb7d5,
-      size: sizeMap[season] ?? 0.25,
+      color:       particleColors[season] ?? 0xffadd2,
+      size:        sizeMap[season] ?? 0.35,
+      map:         ptTex,
       transparent: true,
-      opacity: season === "autumn" ? 0.6 : 0.8,
-      depthWrite: false,
+      opacity:     season === 'autumn' ? 0.55 : 0.75,
+      depthWrite:  false,
+      alphaTest:   0.01,
+      sizeAttenuation: true,
     });
 
     const pts = new THREE.Points(geo, mat);
-    pts.userData.speed  = speedMap[season] ?? 0.06;
-    pts.userData.isRain = season === "autumn";
+    pts.userData.speed  = speedMap[season] ?? 0.05;
+    pts.userData.isRain = season === 'autumn';
     scene.add(pts);
     particlesRef.current = pts;
   }, [season]);
